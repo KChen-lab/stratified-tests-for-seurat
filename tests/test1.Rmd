@@ -1,0 +1,99 @@
+---
+title: "Test stratified test"
+output: html_notebook
+---
+
+```{r}
+
+set.seed(2019)
+counts1 <- c(rpois(100, 10), rpois(100, 9), rpois(100, 20), rpois(100, 18))
+counts2 <- c(rpois(100, 10), rpois(100, 10), rpois(100, 10), rpois(100, 10))
+counts <- rbind(counts1, counts2)
+rownames(counts) <- paste0('gene', 1:dim(counts)[1])
+colnames(counts) <- paste0('cell', 1:dim(counts)[2])
+```
+
+```{r}
+batches <- c(rep('batch1', 200), rep('batch2', 200))
+types <- c(rep('A', 100), rep('B', 100), rep('A', 100), rep('B', 100))
+```
+
+```{r}
+library(Seurat)
+obj <- CreateSeuratObject(counts)
+obj
+```
+
+```{r}
+obj$batch <- batches
+obj$type <- types
+```
+
+```{r}
+VlnPlot(obj, features = rownames(obj@assays$RNA@counts), slot = "counts", group.by = c('type'), log = TRUE)
+```
+
+
+
+
+
+```{r}
+Seurat:::FindMarkers(obj, ident.1 = 'A', ident.2 = 'B', group.by = 'type')
+```
+
+
+```{r}
+source('../R/stratified_test_seurat.R')
+FindMarkers(obj, ident.1 = 'A', ident.2 = 'B', group.by = 'type', test.use = 'VE', latent.vars = 'batch')
+```
+
+```{r}
+ve_test(counts1, list(group = c("Group1", "Group2")[1 + (types == 'A')]), batches)
+```
+
+
+```{r}
+library(ggplot2)
+set.seed(0)
+
+n_group = 2
+n_type = 2
+
+p = 0.1
+
+n_cell_mat = matrix(c(100, 100, 100, 100), ncol = n_type, nrow = n_group)
+x = c(100, 105)
+d = runif(n = n_group, min = 1, max = 2)
+lambda = d %*% t(x)
+
+z = c()
+g = c()
+t = c()
+
+groups = matrix(rep(1:n_group - 1, n_type), ncol = n_type, nrow = n_group)
+types = t(matrix(rep(1:n_type - 1, n_group), ncol = n_group, nrow = n_type))
+
+for (i in 1:length(n_cell_mat))
+{
+  delta = rbinom(n_cell_mat[i], 1, 1 - p)
+  y = rpois(n_cell_mat[i], lambda[i])
+  z = c(z, y * delta)
+  g = c(g, rep(paste("g", groups[i]), n_cell_mat[i]))
+  t = c(t, rep(paste("t", types[i]), n_cell_mat[i]))
+}
+
+sim_data <- data.frame(z, g, t)
+
+ggplot(sim_data, aes(x=g, y=z, fill=t)) + geom_violin(scale = 'count')
+```
+
+```{r}
+wilcox.test(z[t == 't 0' & z != 0], z[t == 't 1' & z != 0])
+```
+
+
+```{r}
+source('../R/stratified_test_seurat.R')
+ve_test(z[z != 0], list(group = c("Group1", "Group2")[1 + (t[z != 0] == 't 1')]), g[z != 0])
+```
+
