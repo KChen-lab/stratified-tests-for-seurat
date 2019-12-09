@@ -4,96 +4,114 @@ output: html_notebook
 ---
 
 ```{r}
+library(Seurat)
+library(ggplot2)
+library(cowplot)
 
 set.seed(2019)
-counts1 <- c(rpois(100, 10), rpois(100, 9), rpois(100, 20), rpois(100, 18))
-counts2 <- c(rpois(100, 10), rpois(100, 10), rpois(100, 10), rpois(100, 10))
-counts <- rbind(counts1, counts2)
+a1 = 101
+a2 = 31
+b1 = 30
+b2 = 100
+counts1 <- c(rpois(a1, 9), rpois(b1, 10), rpois(a2, 8), rpois(b2, 9))
+counts2 <- c(rpois(a1, 8), rpois(b1, 6), rpois(a2, 15), rpois(b2, 14))
+counts3 <- c(rpois(a1, 3), rpois(b1, 3), rpois(a2, 5), rpois(b2, 5))
+counts4 <- c(rpois(a1, 5), rpois(b1, 6), rpois(a2, 5), rpois(b2, 6))
+counts <- rbind(counts1, counts2, counts3, counts4)
 rownames(counts) <- paste0('gene', 1:dim(counts)[1])
 colnames(counts) <- paste0('cell', 1:dim(counts)[2])
-```
 
-```{r}
-batches <- c(rep('batch1', 200), rep('batch2', 200))
-types <- c(rep('A', 100), rep('B', 100), rep('A', 100), rep('B', 100))
-```
+batches <- c(rep('1', a1 + b1), rep('2', a2 + b2))
+types <- c(rep('A', a1), rep('B', b1), rep('A', a2), rep('B', b2))
 
-```{r}
-library(Seurat)
 obj <- CreateSeuratObject(counts)
 obj
-```
 
-```{r}
 obj$batch <- batches
 obj$type <- types
 ```
 
 ```{r}
-VlnPlot(obj, features = rownames(obj@assays$RNA@counts), slot = "counts", group.by = c('type'), log = TRUE)
+df <- as.data.frame(list(Gene1 = counts1, Patient = batches, `Cell type` = types))
+p1 <- ggplot(df, aes(x=Patient, y=Gene1, fill=Cell.type)) + geom_violin(scale = 'count', show.legend = F) + theme_classic()
+p2 <- ggplot(df, aes(x=Cell.type, y=Gene1, fill=Cell.type)) + geom_violin(scale = 'count', show.legend = F) + theme_classic()
+pp1 <- plot_grid(p1, p2, labels = c('  A', '  B'), label_size = 10)
+
+df <- as.data.frame(list(Gene2 = counts2, Patient = batches, `Cell type` = types))
+p1 <- ggplot(df, aes(x=Patient, y=Gene2, fill=Cell.type)) + geom_violin(scale = 'count', show.legend = F) + theme_classic()
+p2 <- ggplot(df, aes(x=Cell.type, y=Gene2, fill=Cell.type)) + geom_violin(scale = 'count', show.legend = F) + theme_classic()
+pp2 <- plot_grid(p1, p2, labels = c('  C', '  D'), label_size = 10)
+
+df <- as.data.frame(list(Gene3 = counts3, Patient = batches, `Cell type` = types))
+p1 <- ggplot(df, aes(x=Patient, y=Gene3, fill=Cell.type)) + geom_violin(scale = 'count', show.legend = F) + theme_classic()
+p2 <- ggplot(df, aes(x=Cell.type, y=Gene3, fill=Cell.type)) + geom_violin(scale = 'count', show.legend = F) + theme_classic()
+pp3 <- plot_grid(p1, p2, labels = c('  E', '  F'), label_size = 10)
+
+df <- as.data.frame(list(Gene4 = counts4, Patient = batches, `Cell type` = types))
+p1 <- ggplot(df, aes(x=Patient, y=Gene4, fill=Cell.type)) + geom_violin(scale = 'count', show.legend = F) + theme_classic()
+p2 <- ggplot(df, aes(x=Cell.type, y=Gene4, fill=Cell.type)) + geom_violin(scale = 'count', show.legend = F) + theme_classic()
+pp4 <- plot_grid(p1, p2, labels = c('  G', '  H'), label_size = 10)
+
+pdf("simulation.pdf", height = 4, width = 8)
+plot_grid(pp1, pp2, pp3, pp4, ncol = 4)
+dev.off()
 ```
 
-
-
-
+```{r}
+p1 <- ggplot(as.data.frame(counts2), aes(x=batches, y=counts2, fill=types)) + geom_violin(scale = 'count')
+p2 <- ggplot(as.data.frame(counts2), aes(x=types, y=counts2, fill=types)) + geom_violin(scale = 'count')
+plot_grid(p1, p2)
+```
 
 ```{r}
-Seurat:::FindMarkers(obj, ident.1 = 'A', ident.2 = 'B', group.by = 'type')
+p1 <- ggplot(as.data.frame(counts3), aes(x=batches, y=counts3, fill=types)) + geom_violin(scale = 'count')
+p2 <- ggplot(as.data.frame(counts3), aes(x=types, y=counts3, fill=types)) + geom_violin(scale = 'count')
+plot_grid(p1, p2)
+```
+
+```{r}
+source('../R/stratified_test_seurat.R')
+FindMarkers(obj, ident.1 = 'A', ident.2 = 'B', group.by = 'type', test.use = 'wilcox', logfc.threshold = 0)[rownames(obj), ]
+
+xtable(FindMarkers(obj, ident.1 = 'A', ident.2 = 'B', group.by = 'type', test.use = 'wilcox', logfc.threshold = 0)[rownames(obj), ], digits=c(0,-3, 3, 3, 3, -3))
 ```
 
 
 ```{r}
 source('../R/stratified_test_seurat.R')
-FindMarkers(obj, ident.1 = 'A', ident.2 = 'B', group.by = 'type', test.use = 'VE', latent.vars = 'batch')
+FindMarkers(obj, ident.1 = 'A', ident.2 = 'B', group.by = 'type', test.use = 'VE', 
+            logfc.threshold = 0, latent.vars = 'batch')[rownames(obj), ]
+
+xtable(FindMarkers(obj, ident.1 = 'A', ident.2 = 'B', group.by = 'type', test.use = 'VE', 
+            logfc.threshold = 0, latent.vars = 'batch')[rownames(obj), ], digits=c(0,-3, 3, 3, 3, 3, -3))
 ```
-
-```{r}
-ve_test(counts1, list(group = c("Group1", "Group2")[1 + (types == 'A')]), batches)
-```
-
-
-```{r}
-library(ggplot2)
-set.seed(0)
-
-n_group = 2
-n_type = 2
-
-p = 0.1
-
-n_cell_mat = matrix(c(100, 100, 100, 100), ncol = n_type, nrow = n_group)
-x = c(100, 105)
-d = runif(n = n_group, min = 1, max = 2)
-lambda = d %*% t(x)
-
-z = c()
-g = c()
-t = c()
-
-groups = matrix(rep(1:n_group - 1, n_type), ncol = n_type, nrow = n_group)
-types = t(matrix(rep(1:n_type - 1, n_group), ncol = n_group, nrow = n_type))
-
-for (i in 1:length(n_cell_mat))
-{
-  delta = rbinom(n_cell_mat[i], 1, 1 - p)
-  y = rpois(n_cell_mat[i], lambda[i])
-  z = c(z, y * delta)
-  g = c(g, rep(paste("g", groups[i]), n_cell_mat[i]))
-  t = c(t, rep(paste("t", types[i]), n_cell_mat[i]))
-}
-
-sim_data <- data.frame(z, g, t)
-
-ggplot(sim_data, aes(x=g, y=z, fill=t)) + geom_violin(scale = 'count')
-```
-
-```{r}
-wilcox.test(z[t == 't 0' & z != 0], z[t == 't 1' & z != 0])
-```
-
 
 ```{r}
 source('../R/stratified_test_seurat.R')
-ve_test(z[z != 0], list(group = c("Group1", "Group2")[1 + (t[z != 0] == 't 1')]), g[z != 0])
+FindMarkers(obj, ident.1 = 'A', ident.2 = 'B', group.by = 'type', test.use = 'VE', 
+            logfc.threshold = 0, latent.vars = 'batch', genre = 'design-free')[rownames(obj), ]
+
+xtable(FindMarkers(obj, ident.1 = 'A', ident.2 = 'B', group.by = 'type', test.use = 'VE', 
+            logfc.threshold = 0, latent.vars = 'batch', genre = 'design-free')[rownames(obj), ], digits=c(0,-3, 3, 3, 3, 3, -3))
+```
+
+```{r}
+source('../R/stratified_test_seurat.R')
+FindMarkers(obj, ident.1 = 'A', ident.2 = 'B', group.by = 'type', test.use = 'poisson', logfc.threshold = 0)[rownames(obj), ]
+```
+
+```{r}
+source('../R/stratified_test_seurat.R')
+FindMarkers(obj, ident.1 = 'A', ident.2 = 'B', group.by = 'type', test.use = 'poisson', logfc.threshold = 0, latent.vars = 'batch')[rownames(obj), ]
+```
+
+```{r}
+source('../R/stratified_test_seurat.R')
+FindMarkers(obj, ident.1 = 'A', ident.2 = 'B', group.by = 'type', test.use = 'LR', logfc.threshold = 0, latent.vars = 'batch')[rownames(obj), ]
+```
+
+```{r}
+source('../R/stratified_test_seurat.R')
+FindMarkers(obj, ident.1 = 'A', ident.2 = 'B', group.by = 'type', test.use = 'LR', logfc.threshold = 0)[rownames(obj), ]
 ```
 

@@ -42,14 +42,16 @@ ve_test_core <- function (x, y, correct = TRUE)
   
   CORRECTION <- 0
   STATISTIC <- c(W = sum(r[seq_along(x)]) - n.x * (n.x + 1)/2)
+  
   TIES <- (length(r) != length(unique(r)))
   NTIES <- table(r)
+
   z <- STATISTIC - n.x * n.y/2
   SIGMA <- sqrt((n.x * n.y/12) * ((n.x + n.y + 1) - sum(NTIES^3 - NTIES)/((n.x + n.y) * (n.x + n.y - 1))))
   if (correct) CORRECTION <- sign(z) * 0.5
   
   # instead of continue and calculate the wilcoxon statistics, we return the U and V needed by Van Eteren test.
-  list(U = z - CORRECTION, V = SIGMA)
+  list(U = unname(z - CORRECTION), V = SIGMA, U_raw = unname(STATISTIC))
 }
 
 ve_test <- function (x, label, strata, ...) 
@@ -57,8 +59,13 @@ ve_test <- function (x, label, strata, ...)
   param <- list(...)
   if ('correct' %in% names(param)) correct <- param$correct
   else correct <- TRUE
+  if ('genre' %in% names(param)) genre <- param$genre
+  else genre <- 'locally-best'
+  
+  stopifnot(genre %in% c('locally-best', 'design-free'))
   
   Us = c()
+  U_raws = c()
   Vs = c()
   Ms = c()
   Ns = c()
@@ -71,17 +78,23 @@ ve_test <- function (x, label, strata, ...)
                          y=x[mask2],
                          correct=correct)
     Us = c(Us, temp$U)
+    U_raws = c(U_raws, temp$U_raw)
     Vs = c(Vs, temp$V)
     Ms = c(Ms, sum(mask1))
     Ns = c(Ns, sum(mask2))
     Ss = c(Ss, s)
   }
  
-  list(p.value = pchisq(sum(Us / (Ms + Ns + 1)) ^ 2 / sum((Vs / (Ms + Ns + 1)) ^ 2), 
-                        df = 1, lower.tail = F) * sign(sum(Us / (Ms + Ns + 1))))
-  
-  #list(p.value = pchisq(sum(Us / (Ms * Ns)) ^ 2 / sum((Vs / (Ms * Ns)) ^ 2), 
-  #                      df = 1, lower.tail = F) * sign(sum(Us / (Ms + Ns + 1))))
+  if (genre == 'locally-best'){
+    res <- list(p.value = pchisq(sum(Us / (Ms + Ns + 1)) ^ 2 / sum((Vs / (Ms + Ns + 1)) ^ 2), 
+                                 df = 1, lower.tail = F),
+                effect.size = sum(U_raws / (Ms + Ns + 1)) / sum(Ms * Ns / (Ms + Ns + 1)))
+  } else if (genre == 'design-free'){
+    res <- list(p.value = pchisq(sum(Us / (Ms * Ns)) ^ 2 / sum((Vs / (Ms * Ns)) ^ 2), 
+                          df = 1, lower.tail = F),
+                effect.size = sum(U_raws / (Ms * Ns)) / length(Ms))
+  }
+  return(res)
 }
 
 VEDETest <- function (data.use, cells.1, cells.2, latent.vars, verbose = TRUE, ...) 
@@ -95,23 +108,22 @@ VEDETest <- function (data.use, cells.1, cells.2, latent.vars, verbose = TRUE, .
   latent.vars <- latent.vars[rownames(x = group.info), , drop = FALSE]
   latent.vars <- do.call(paste, latent.vars)
   
-  print(as.matrix(data.use))
-  print(group.info)
-  print(latent.vars)
-  print(ve_test(data.use[1, ], group.info, latent.vars, ...)$p.value)
-  
-  
   my.sapply <- ifelse(test = verbose && nbrOfWorkers() == 1, 
                       yes = pbsapply, no = future_sapply)
   
-  p_val <- my.sapply(X = 1:nrow(x = data.use), FUN = function(x) {
-    return(ve_test(data.use[x, ], group.info, latent.vars, ...)$p.value)
+  test_res <- my.sapply(X = 1:nrow(x = data.use), FUN = function(x) {
+    return(ve_test(data.use[x, ], group.info, latent.vars, ...))
   })
   
+  p.val <- unlist(test_res['p.value', ])
+  effect.size <- unlist(test_res['effect.size', ])
+  #print(test_res)
+  #print(p.val)
+  #print(effect.size)
+  #print(rownames(x = data.use))
   
-  
-  return(data.frame(p_val=abs(p_val), 
-                    pos_neg=c('-', '0', '+')[sign(p_val) + 2], 
+  return(data.frame(p_val=p.val, 
+                    effect_size=effect.size,
                     row.names = rownames(x = data.use)))
 }
 
@@ -417,7 +429,8 @@ FindMarkers.default <- function(
       cells.1 = cells.1,
       cells.2 = cells.2,
       latent.vars = latent.vars,
-      verbose = verbose
+      verbose = verbose,
+      ...
     ),
     stop("Unknown test: ", test.use)
   )
