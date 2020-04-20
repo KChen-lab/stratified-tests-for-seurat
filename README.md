@@ -5,4 +5,6 @@ We developed hypothesis tests for Seurat by modifying corresponding functions in
 
 # Implemented tests
 1. Van Elteren test (stratified Wilcoxon U-test)
-2. 
+
+# Publications
+[Stratified Test Alleviates Batch Effects in Single-Cell Data](https://link.springer.com/chapter/10.1007%2F978-3-030-42266-0_13)
