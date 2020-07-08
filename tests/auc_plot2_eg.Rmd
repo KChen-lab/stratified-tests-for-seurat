@@ -1,0 +1,178 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(splatter)
+library(Seurat)
+library(plotROC)
+library(zoo)
+```
+
+
+```{r}
+sim <- splatSimulate(nGenes = 1000,
+                       batchCells = c(100, 200, 300, 400, 500, 600), batch.facLoc = 2., batch.facScale = .8,
+                       group.prob = c(0.3, 0.7),
+                       bcv.common = 0.5,
+                       method = "groups", verbose = FALSE, seed=2025)
+  
+  gene_info = as.data.frame(rowData(sim))
+  gene_info
+  
+  true_markers = rownames(gene_info)[(gene_info$DEFacGroup1 < 1) | (gene_info$DEFacGroup2 < 1)]
+  length(true_markers)
+  
+  meta.data <- as.data.frame(colData(sim))
+  batch_names <- unique(meta.data$Batch)
+  for (i in batch_names){
+    meta.data[[i]] <- as.numeric(meta.data$Batch == i)
+  }
+  meta.data
+  
+  obj <- CreateSeuratObject(counts(sim), meta.data = meta.data)
+  obj <- NormalizeData(obj)
+  Idents(obj) = obj$Group
+  
+  
+  gene_auc = function(true_gene, pred_gene){
+    fpr = rep(0, length(pred_gene))
+    tpr = rep(0, length(pred_gene))
+    
+    n_good = 0
+    n_bad = 0
+    
+    n_p = length(true_gene)
+    n_n = length(pred_gene) - n_p
+    for (i in 1:length(pred_gene)){
+      if (pred_gene[i] %in% true_gene) {
+        n_good = n_good + 1
+      } else {
+        n_bad = n_bad + 1
+      }
+      
+      tpr[i] = n_good / n_p
+      fpr[i] = n_bad / n_n
+    }
+    sum(diff(c(0, fpr)) * rollmean(c(0, tpr), 2))
+  }
+  
+  tests = c('MAST')
+  names(tests) = c('MAST')
+  
+  markers_mast$MAST <-  FindMarkers(obj, test.use = 'MAST', 
+                                    logfc.threshold = -Inf, min.pct = -Inf, min.cells.feature = 0,
+                                    ident.1 = 'Group1', ident.2 = 'Group2')
+  
+  markers_mast$MAST_with_covariate <- FindMarkers(obj, test.use = 'MAST', latent.vars = batch_names,
+                                                  logfc.threshold = -Inf, min.pct = -Inf, min.cells.feature = 0,
+                                                  ident.1 = 'Group1', ident.2 = 'Group2')
+  
+  tests = c('wilcox', 'bimod', 'roc', 't', 'negbinom', 'poisson', 'LR', 'DESeq2')
+  names(tests) = c('Wilcoxon', 'Bimod', 'ROC_Analysis', 't-test', 'Negative_Binomial', 'Poisson', 'LR', 'DESeq2')
+  
+  markers_orig <- lapply(tests,
+                         function(test.use) {
+                           FindMarkers(obj, test.use = test.use, slot="counts",
+                                       logfc.threshold = -Inf, min.pct = -Inf, min.cells.feature = 0,
+                                       ident.1 = 'Group1', ident.2 = 'Group2')
+                         })
+  
+  # Note: MAST only accept numeric latent var
+  tests = c('negbinom', 'poisson', 'LR')
+  names(tests) = c('Negative_Binomial_with_covariate', 'Poisson_with_covariate', 'LR_with_covariate')
+  
+  markers_covar <- lapply(tests,
+                          function(test.use) {
+                            FindMarkers(obj, test.use = test.use, latent.vars = batch_names, slot="counts",
+                                        logfc.threshold = -Inf, min.pct = -Inf, min.cells.feature = 0,
+                                        ident.1 = 'Group1', ident.2 = 'Group2')
+                          })
+  
+  source('../R/stratified_test_seurat_rename.R')
+  
+  tests = c('VE')
+  names(tests) = c('vanElteren')
+  
+  markers_ve <- lapply(tests,
+                       function(test.use) {
+                         FindMarkers2.Seurat(obj, test.use = test.use, latent.vars = 'Batch', slot="counts",
+                                             logfc.threshold = -Inf, min.pct = -Inf, min.cells.feature = 0,
+                                             ident.1 = 'Group1', ident.2 = 'Group2')
+                       })
+  
+  roc_auc = function(true_markers, markers, test) {
+    df <- data.frame(D = as.numeric(rownames(markers) %in% true_markers), 
+                     M = -log10(markers$p_val),  
+                     Test = test)
+    plt = ggplot(df, aes(m = M, d = D)) + geom_roc() + style_roc()
+    list(df = df, auc = calc_auc(plt)$AUC)
+  }
+  
+  roc_df = function(true_markers, markers, test) {
+    if ('p_val' %in% colnames(markers)) {
+      df <- data.frame(D = as.numeric(rownames(markers) %in% true_markers), 
+                       M = -log10(markers$p_val),  
+                       Test = test)
+    }
+    else {
+      df <- data.frame(D = as.numeric(rownames(markers) %in% true_markers), 
+                       M = markers$power,  
+                       Test = test)
+    }
+    df
+  }
+  
+  all_markers <- c(markers_orig, markers_mast, markers_covar, markers_ve[-2])
+  all_roc_dfs <- list()
+  
+  for (i in names(all_markers)){
+    all_roc_dfs[[i]] <- roc_df(true_markers, all_markers[[i]], i)
+  }
+  
+  
+  all_auc = rep(0, length(all_markers))
+  names(all_auc) = names(all_markers)
+  for (i in names(all_markers)){
+    all_auc[i] = gene_auc(true_markers, rownames(all_markers[[i]]))
+  }
+```
+
+
+```{r}
+#pdf('roc-orig.pdf', height=2.8, width=4)
+ggplot(data.table::rbindlist(all_roc_dfs[c('vanElteren', 'Wilcoxon', 'Bimod', 'ROC_Analysis', 't-test', 'DESeq2')]), aes(m = M, d = D, color = Test)) + geom_roc(size = 0.5, pointsize=NA, labels = FALSE) + style_roc(theme = theme_light) + scale_color_brewer(palette="Set1") + theme(
+  legend.title = element_text(size = 10),
+  legend.text = element_text(size = 10),
+  axis.text=element_text(size=4),
+  axis.title=element_text(size=10)
+  )
+#dev.off()
+```
+
+
+```{r}
+#pdf('roc-cov.pdf', height=2.8, width=4)
+ggplot(data.table::rbindlist(all_roc_dfs[c('vanElteren', 'Negative_Binomial_with_covariate', 'Negative_Binomial',  'Poisson_with_covariate', 'Poisson', 'LR_with_covariate', 'LR', 'MAST_with_covariate', 'MAST')]), aes(m = M, d = D, color = Test)) + geom_roc(size = 0.5, pointsize=NA, labels = FALSE) + style_roc(theme = theme_light) + scale_color_brewer(palette="Set1") + theme(
+  legend.title = element_text(size = 10),
+  legend.text = element_text(size = 10),
+  axis.text=element_text(size=4),
+  axis.title=element_text(size=10)
+  )
+#dev.off()
+```
+
+```{r}
+all_auc = rep(0, length(all_markers))
+names(all_auc) = names(all_markers)
+for (i in names(all_markers)){
+  all_auc[i] = gene_auc(true_markers, rownames(all_markers[[i]]))
+}
+
+all_auc[order(-all_auc)]
+
+```
+
+
