@@ -1,0 +1,51 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+
+```{r}
+auc_list <- readRDS(file = "auc2.RDS")
+auc_mat <- do.call(cbind, auc_list)
+auc_mat
+```
+
+```{r}
+row.names(auc_mat) <- c('Wilcoxon', 'Likelihood Ratio', 'ROC Analysis', 't-Test', 'Negative Binomial', 'Poisson', 'Logistic Regression', 'DESeq2', 'MAST', 'MAST +', 'Negative Binomial +', 'Poisson +', 'Logistic Regression +', 'Van Elteren (Wilcoxon +)')
+```
+
+
+```{r}
+#rowMeans(auc_mat)
+auc_sd <- rowSds(auc_mat)
+names(auc_sd) <- names(rowMeans(auc_mat))
+
+t(rbind(round(rowMeans(auc_mat), 3), round(auc_sd * 3, 3)))
+```
+
+```{r}
+x = paste(round(rowMeans(auc_mat), 3), round(auc_sd * 3, 3), sep = "\\pm")
+x = paste0("$", x, "$")
+names(x) = names(auc_sd)
+as.data.frame(x)
+```
+
+
+```{r}
+auc_df <- stack(as.data.frame(t(auc_mat)))
+colnames(auc_df) <- c("AUC", "Test")
+auc_df
+```
+
+```{r}
+ggplot(auc_df, aes(x=Test, y=AUC)) + geom_boxplot() + coord_flip() + theme_classic()
+```
+
+```{r}
+pdf('roc-summary.pdf', height = 3, width = 4)
+ggplot(auc_df, aes(x=Test, y=AUC)) + geom_boxplot() + coord_flip() + theme_classic()
+dev.off()
+```
+
