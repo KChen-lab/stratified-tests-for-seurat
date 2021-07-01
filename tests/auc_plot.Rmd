@@ -1,0 +1,52 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+auc_list <- readRDS(file = "auc-es-1.RDS")
+#auc_list2 <- readRDS(file = "auc3-sigemd.RDS")
+
+auc_mat <- do.call(cbind, auc_list)
+auc_mat
+
+rowMeans(auc_mat)
+
+auc_df <- stack(as.data.frame(t(auc_mat)))
+colnames(auc_df) <- c("AUC", "Test")
+auc_df
+
+library(ggplot2)
+ggplot(auc_df, aes(x=Test, y=AUC)) + geom_boxplot() + coord_flip() + theme_classic()
+```
+```{r}
+auc_list <- readRDS(file = "auc-es-3.RDS")
+#auc_list2 <- readRDS(file = "auc3-sigemd.RDS")
+
+auc_mat <- do.call(cbind, auc_list)
+auc_mat
+
+rowMeans(auc_mat)
+
+auc_df <- stack(as.data.frame(t(auc_mat)))
+colnames(auc_df) <- c("AUC", "Test")
+auc_df
+
+library(ggplot2)
+ggplot(auc_df, aes(x=Test, y=AUC)) + geom_boxplot() + coord_flip() + theme_classic()
+```
+```{r}
+auc_list <- readRDS(file = "auc-es-5.RDS")
+
+auc_mat <- do.call(cbind, auc_list)
+auc_mat
+
+rowMeans(auc_mat)
+
+auc_df <- stack(as.data.frame(t(auc_mat)))
+colnames(auc_df) <- c("AUC", "Test")
+auc_df
+
+library(ggplot2)
+ggplot(auc_df, aes(x=Test, y=AUC)) + geom_boxplot() + coord_flip() + theme_classic()
+```
