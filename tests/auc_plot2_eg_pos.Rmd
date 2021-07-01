@@ -1,0 +1,394 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(splatter)
+library(Seurat)
+library(plotROC)
+library(zoo)
+```
+
+
+```{r}
+sim <- splatSimulate(nGenes = 1000,
+                       batchCells = c(100, 200, 300, 400, 500, 600), batch.facLoc = 2., batch.facScale = .8,
+                       group.prob = c(0.3, 0.7),
+                       bcv.common = 0.5,
+                       method = "groups", verbose = FALSE, seed=2025)
+  
+gene_info = as.data.frame(rowData(sim))
+gene_info
+
+true_markers = rownames(gene_info)[(gene_info$DEFacGroup1 < 1) | (gene_info$DEFacGroup2 < 1)]
+length(true_markers)
+
+meta.data <- as.data.frame(colData(sim))
+batch_names <- unique(meta.data$Batch)
+for (i in batch_names){
+  meta.data[[i]] <- as.numeric(meta.data$Batch == i)
+}
+meta.data
+
+obj <- CreateSeuratObject(counts(sim), meta.data = meta.data)
+obj <- NormalizeData(obj)
+Idents(obj) = obj$Group
+
+
+gene_auc = function(true_gene, pred_gene){
+  fpr = rep(0, length(pred_gene))
+  tpr = rep(0, length(pred_gene))
+  
+  n_good = 0
+  n_bad = 0
+  
+  n_p = length(true_gene)
+  n_n = length(pred_gene) - n_p
+  for (i in 1:length(pred_gene)){
+    if (pred_gene[i] %in% true_gene) {
+      n_good = n_good + 1
+    } else {
+      n_bad = n_bad + 1
+    }
+    
+    tpr[i] = n_good / n_p
+    fpr[i] = n_bad / n_n
+  }
+  sum(diff(c(0, fpr)) * rollmean(c(0, tpr), 2))
+}
+```
+
+
+```{r}
+tests = c('MAST')
+names(tests) = c('MAST')
+markers_mast <- list()
+markers_mast$MAST <-  FindMarkers(obj, test.use = 'MAST', 
+                                  logfc.threshold = -Inf, min.pct = -Inf, min.cells.feature = 0,
+                                  ident.1 = 'Group1', ident.2 = 'Group2')
+
+markers_mast[['MAST +']] <- FindMarkers(obj, test.use = 'MAST', latent.vars = batch_names,
+                                                logfc.threshold = -Inf, min.pct = -Inf, min.cells.feature = 0,
+                                                ident.1 = 'Group1', ident.2 = 'Group2')
+```
+
+
+
+```{r}
+tests = c('wilcox', 'bimod', 'roc', 't', 'negbinom', 'poisson', 'LR', 'DESeq2')
+names(tests) = c('Wilcoxon', 'Likelihood Ratio', 'ROC Analysis', 't-Test', 'Negative Binomial', 'Poisson', 'Logistic Regression', 'DESeq2')
+
+markers_orig <- lapply(tests,
+                       function(test.use) {
+                         FindMarkers(obj, test.use = test.use, slot="counts",
+                                     logfc.threshold = -Inf, min.pct = -Inf, min.cells.feature = 0,
+                                     ident.1 = 'Group1', ident.2 = 'Group2')
+                       })
+
+# Note: MAST only accept numeric latent var
+tests = c('negbinom', 'poisson', 'LR')
+names(tests) = c('Negative Binomial +', 'Poisson +', 'Logistic Regression +')
+
+markers_covar <- lapply(tests,
+                        function(test.use) {
+                          FindMarkers(obj, test.use = test.use, latent.vars = batch_names, slot="counts",
+                                      logfc.threshold = -Inf, min.pct = -Inf, min.cells.feature = 0,
+                                      ident.1 = 'Group1', ident.2 = 'Group2')
+                        }) 
+
+source('../R/stratified_test_seurat_rename.R')
+
+tests = c('VE')
+names(tests) = c('Van Elteren (Wilcoxon +)')
+
+markers_ve <- lapply(tests,
+                     function(test.use) { 
+                       FindMarkers2.Seurat(obj, test.use = test.use, latent.vars = 'Batch', slot="counts",
+                                           logfc.threshold = -Inf, min.pct = -Inf, min.cells.feature = 0,
+                                           ident.1 = 'Group1', ident.2 = 'Group2')
+                     })
+
+tests = c('DESeq2')
+names(tests) = c('DESeq2 +')
+
+markers_deseq2 <- lapply(tests,
+                     function(test.use) {
+                       FindMarkers2.Seurat(obj, test.use = test.use, latent.vars = 'Batch', slot="counts",
+                                           logfc.threshold = -Inf, min.pct = -Inf, min.cells.feature = 0,
+                                           ident.1 = 'Group1', ident.2 = 'Group2')
+                     })
+
+roc_auc = function(true_markers, markers, test) {
+  df <- data.frame(D = as.numeric(rownames(markers) %in% true_markers), 
+                   M = -log10(markers$p_val),  
+                   Test = test)
+  plt = ggplot(df, aes(m = M, d = D)) + geom_roc() + style_roc()
+  list(df = df, auc = calc_auc(plt)$AUC)
+}
+
+roc_df = function(true_markers, markers, test) {
+  if ('p_val' %in% colnames(markers)) {
+    df <- data.frame(D = as.numeric(rownames(markers) %in% true_markers), 
+                     M = -log10(markers$p_val),  
+                     Test = test)
+  }
+  else {
+    df <- data.frame(D = as.numeric(rownames(markers) %in% true_markers), 
+                     M = markers$power,  
+                     Test = test)
+  }
+  df
+}
+```
+
+```{r}
+# SigEMD is based on R package "aod","arm","fdrtool","lars"
+library(aod)
+library(arm)
+library(fdrtool)
+library(lars)
+source("SigEMD-master/FunImpute.R")
+source("SigEMD-master/SigEMDHur.R")
+source("SigEMD-master/SigEMDnonHur.R")
+source("SigEMD-master/plot_sig.R")
+```
+
+```{r}
+data <- as.matrix(obj@assays$RNA@data)
+condition <- obj$Group
+  
+############################# Imputation #############################
+## Imputation can be chosen by the user. It is not a necessary step in SigEMD, but we suggest to impute the missing zero values.
+## A lasso regression model is fitted to impute the missing values.
+## First, identify a set of genes need to be imputed (Hur_gene) and a set of genes (genes_use) used to fit the lasso model.
+
+databinary <- databin(data)
+Hur_gene<- idfyImpgene(data,databinary,condition)
+genes_use<- idfyUsegene(data,databinary,condition,ratio = 0.8) # ratio is default as 0.8, but it can be set by users to obtain appropriate number of genes_use.
+{sink("/dev/null"); datimp <- FunImpute(object = data, genes_use = (genes_use), genes_fit = (Hur_gene),dcorgene = NULL); sink();}
+data<-datimp$alldat
+
+saveRDS(list(data=data, Hur_gene=Hur_gene), "sigemd_impute.RDS")
+```
+
+```{r}
+############################# Idntify diferentially expressed genes #############################
+
+# Call calculate_single. 
+#Here we only use 5 permutations as an example, but in actual experiments using at least 100 permutations is advised. 
+#If previours "Imputation" step is applied, then variable "Hur_gene" is can be direcly used. 
+#If the user did not impute the data, then "Hur_gene" can be set to NULL. 
+results <- calculate_single(data =  data,condition =  condition,Hur_gene = Hur_gene, binSize=0.2,nperm=200)
+# Set Hur_gene to NULL if imputation isn't applied.
+#results<- calculate_single(data =  data,condition =  condition,Hur_gene = NULL, binSize=0.2,nperm=200)
+
+# The function returns a matrix with EMD score and the adjust p-value of each gene.
+markers_sigemd <- list(SigEMD=results$emdall)
+colnames(markers_sigemd$SigEMD) <- c('emd', 'p_val', 'p_val_adj')
+
+#saveRDS(markers_sigemd, 'markers_sigemd.RDS')
+#markers_sigemd <- readRDS('markers_sigemd.RDS')
+```
+
+```{r}
+data <- as.matrix(obj@assays$RNA@data)
+condition <- obj$Group
+  
+############################# Imputation #############################
+## Imputation can be chosen by the user. It is not a necessary step in SigEMD, but we suggest to impute the missing zero values.
+## A lasso regression model is fitted to impute the missing values.
+## First, identify a set of genes need to be imputed (Hur_gene) and a set of genes (genes_use) used to fit the lasso model.
+
+#databinary <- databin(data)
+#Hur_gene<- idfyImpgene(data,databinary,condition)
+#genes_use<- idfyUsegene(data,databinary,condition,ratio = 0.8) # ratio is default as 0.8, but it can be set by users to obtain appropriate number of genes_use.
+#{sink("/dev/null"); datimp <- FunImpute(object = data, genes_use = (genes_use), genes_fit = (Hur_gene),dcorgene = NULL); sink();}
+#data<-datimp$alldat
+
+#saveRDS(list(data=data, Hur_gene=Hur_gene), "sigemd_impute.RDS")
+```
+
+```{r}
+############################# Idntify diferentially expressed genes #############################
+
+# Call calculate_single. 
+#Here we only use 5 permutations as an example, but in actual experiments using at least 100 permutations is advised. 
+#If previours "Imputation" step is applied, then variable "Hur_gene" is can be direcly used. 
+#If the user did not impute the data, then "Hur_gene" can be set to NULL. 
+#results <- calculate_single(data =  data,condition =  condition,Hur_gene = Hur_gene, binSize=0.2,nperm=200)
+# Set Hur_gene to NULL if imputation isn't applied.
+results<- calculate_single(data =  data,condition =  condition,Hur_gene = NULL, binSize=0.2,nperm=200)
+
+# The function returns a matrix with EMD score and the adjust p-value of each gene.
+markers_sigemd <- list(SigEMD=results$emdall)
+colnames(markers_sigemd$SigEMD) <- c('emd', 'p_val', 'p_val_adj')
+
+#saveRDS(markers_sigemd, 'markers_sigemd.RDS')
+#markers_sigemd <- readRDS('markers_sigemd.RDS')
+```
+
+```{r}
+library(DEsingle)
+results <- DEsingle(counts = obj@assays$RNA@counts, group = obj$Group, parallel = TRUE)
+```
+
+```{r}
+markers_desingle <- results[c('pvalue', 'pvalue.adj.FDR')]
+colnames(markers_desingle) <- c('p_val', 'p_val_adj')
+markers_desingle = list(DEsingle=markers_desingle)
+```
+
+
+```{r}
+markers_sigemd$SigEMD <- as.data.frame(markers_sigemd$SigEMD)
+markers_sigemd$SigEMD <- markers_sigemd$SigEMD[order(markers_sigemd$SigEMD$p_val)]
+
+all_markers <- c(markers_orig, markers_mast, markers_covar, markers_ve[-2], markers_sigemd, markers_desingle, markers_deseq2)
+all_roc_dfs <- list()
+
+for (i in names(all_markers)){
+  all_roc_dfs[[i]] <- roc_df(true_markers, all_markers[[i]], i)
+}
+
+
+all_auc = rep(0, length(all_markers))
+names(all_auc) = names(all_markers)
+for (i in names(all_markers)){
+  all_auc[i] = gene_auc(true_markers, rownames(all_markers[[i]]))
+}
+```
+
+```{r}
+set1_colors = RColorBrewer::brewer.pal(9, "Set1")
+set2_colors = RColorBrewer::brewer.pal(8, "Set2")
+set3_colors = RColorBrewer::brewer.pal(8, "Set3")
+
+gray_colors = c("#000000", "#202020", "#404040", "#606060", "#808080", "#A0A0A0", "#B8B8B8", "#D0D0D0")
+```
+
+
+```{r}
+pdf('roc-orig2.pdf', height=3, width=6)
+ggplot(data.table::rbindlist(all_roc_dfs[c('Van Elteren (Wilcoxon +)', 'Wilcoxon', 'Likelihood Ratio', 'ROC Analysis', 't-Test', 'DESeq2', 'SigEMD', 'DEsingle')]), aes(m = M, d = D, color = Test, linetype=Test)) + geom_roc(size = 0.3, pointsize=NA, labels = FALSE) + style_roc(theme = theme_light) + 
+  scale_color_manual(values=c(set1_colors[1], set1_colors[1], set1_colors[2:8])) +
+  scale_linetype_manual(values=c('solid', rep('twodash', 7))) +
+  theme(
+  legend.title = element_text(size = 15),
+  legend.text = element_text(size = 12),
+  axis.text=element_text(size=7),
+  axis.title=element_text(size=12)
+  )
+dev.off()
+```
+```{r}
+getwd()
+```
+
+
+```{r}
+pdf('roc-orig2-grey-rev.pdf', height=3, width=6)
+ggplot(data.table::rbindlist(all_roc_dfs[c('Van Elteren (Wilcoxon +)', 'Wilcoxon', 'Likelihood Ratio', 'ROC Analysis', 't-Test', 'DESeq2', 'SigEMD', 'DEsingle')]), aes(m = M, d = D, color = Test, linetype=Test)) + geom_roc(size = 0.25, pointsize=NA, labels = FALSE) + style_roc(theme = theme_light) + 
+  scale_color_manual(values=c(gray_colors)) +
+  scale_linetype_manual(values=c('solid', 'longdash', 'twodash', 'dotted', 'solid', 'longdash', 'twodash', 'dotted')) +
+  theme(
+  legend.title = element_text(size = 15),
+  legend.text = element_text(size = 12),
+  axis.text=element_text(size=7),
+  axis.title=element_text(size=12)
+  )
+
+ggplot(data.table::rbindlist(all_roc_dfs[c('Van Elteren (Wilcoxon +)', 'Negative Binomial +', 'Negative Binomial',  'Poisson +', 'Poisson')]), aes(m = M, d = D, color = Test, linetype=Test)) + geom_roc(size = 0.25, pointsize=NA, labels = FALSE) + style_roc(theme = theme_light) + 
+  scale_color_manual(values=c(gray_colors[c(1, 3, 3, 6, 6)])) +
+  scale_linetype_manual(values=c('solid', 'longdash', 'twodash', 'longdash', 'twodash')) +
+  theme(
+  legend.title = element_text(size = 15),
+  legend.text = element_text(size = 12),
+  axis.text=element_text(size=7),
+  axis.title=element_text(size=12)
+  )
+
+ggplot(data.table::rbindlist(all_roc_dfs[c('Van Elteren (Wilcoxon +)', 'Logistic Regression +', 'Logistic Regression', 'MAST +', 'MAST', 'DESeq2', 'DESeq2 +')]), aes(m = M, d = D, color = Test, linetype=Test)) + geom_roc(size = 0.25, pointsize=NA, labels = FALSE) + style_roc(theme = theme_light) + 
+  scale_color_manual(values=c(gray_colors[c(1, 2, 2, 5, 5, 8, 8)])) +
+  scale_linetype_manual(values=c('solid', 'longdash', 'twodash', 'longdash', 'twodash', 'longdash', 'twodash')) +
+  theme(
+  legend.title = element_text(size = 15),
+  legend.text = element_text(size = 12),
+  axis.text=element_text(size=7),
+  axis.title=element_text(size=12)
+  )
+
+dev.off()
+```
+```{r}
+pdf('roc-orig2-grey-rev.pdf', height=3, width=6)
+ggplot(data.table::rbindlist(all_roc_dfs[c('Van Elteren (Wilcoxon +)', 'Wilcoxon', 'Likelihood Ratio', 'ROC Analysis', 't-Test')]), aes(m = M, d = D, color = Test, linetype=Test)) + geom_roc(size = 0.3, pointsize=NA, labels = FALSE) + style_roc(theme = theme_light) + 
+  scale_color_manual(values=c(gray_colors[c(1, 2, 2, 6, 6)])) +
+  scale_linetype_manual(values=c('solid', '83', '32', '83', '32')) +
+  theme(
+  legend.title = element_text(size = 15),
+  legend.text = element_text(size = 12),
+  axis.text=element_text(size=7),
+  axis.title=element_text(size=12)
+  ) +  guides(colour=guide_legend(override.aes=list(shape=NA)))
+
+ggplot(data.table::rbindlist(all_roc_dfs[c('Van Elteren (Wilcoxon +)', 'SigEMD', 'DEsingle', 'DESeq2 +', 'DESeq2')]), aes(m = M, d = D, color = Test, linetype=Test)) + geom_roc(size = 0.3, pointsize=NA, labels = FALSE) + style_roc(theme = theme_light) + 
+  scale_color_manual(values=c(gray_colors[c(1, 2, 2, 6, 6)])) +
+  scale_linetype_manual(values=c('solid', '83', '32', '83', '32')) +
+  theme(
+  legend.title = element_text(size = 15),
+  legend.text = element_text(size = 12),
+  axis.text=element_text(size=7),
+  axis.title=element_text(size=12)
+  ) +  guides(colour=guide_legend(override.aes=list(shape=NA)))
+
+ggplot(data.table::rbindlist(all_roc_dfs[c('Van Elteren (Wilcoxon +)', 'Negative Binomial +', 'Negative Binomial',  'Poisson +', 'Poisson')]), aes(m = M, d = D, color = Test, linetype=Test)) + geom_roc(size = 0.3, pointsize=NA, labels = FALSE) + style_roc(theme = theme_light) + 
+  scale_color_manual(values=c(gray_colors[c(1, 2, 2, 6, 6)])) +
+  scale_linetype_manual(values=c('solid', '83', '32', '83', '32')) +
+  theme(
+  legend.title = element_text(size = 15),
+  legend.text = element_text(size = 12),
+  axis.text=element_text(size=7),
+  axis.title=element_text(size=12)
+  )+  guides(colour=guide_legend(override.aes=list(shape=NA)))
+
+ggplot(data.table::rbindlist(all_roc_dfs[c('Van Elteren (Wilcoxon +)', 'Logistic Regression +', 'Logistic Regression', 'MAST +', 'MAST')]), aes(m = M, d = D, color = Test, linetype=Test)) + geom_roc(size = 0.3, pointsize=NA, labels = FALSE) + style_roc(theme = theme_light) + 
+  scale_color_manual(values=c(gray_colors[c(1, 2, 2, 6, 6)])) +
+  scale_linetype_manual(values=c('solid', '83', '32', '83', '32')) +
+  theme(
+  legend.title = element_text(size = 15),
+  legend.text = element_text(size = 12),
+  axis.text=element_text(size=7),
+  axis.title=element_text(size=12)
+  )+  guides(colour=guide_legend(override.aes=list(shape=NA)))
+
+dev.off()
+```
+
+```{r}
+pdf('roc-cov.pdf', height=3, width=6)
+ggplot(data.table::rbindlist(all_roc_dfs[c('Van Elteren (Wilcoxon +)', 'Negative Binomial +', 'Negative Binomial',  'Poisson +', 'Poisson', 'Logistic Regression +', 'Logistic Regression', 'LR', 'MAST +', 'MAST')]), aes(m = M, d = D, color = Test, linetype=Test)) + geom_roc(size = 0.3, pointsize=NA, labels = FALSE) + style_roc(theme = theme_light) + 
+  scale_color_manual(values=c(set1_colors[1], rep(set3_colors[1], 2), rep(set3_colors[3], 2), rep(set3_colors[4], 2), rep(set3_colors[7], 2))) +
+  scale_linetype_manual(values=c('solid', rep(c('solid', 'twodash'), 5))) +
+  theme(
+  legend.title = element_text(size = 15),
+  legend.text = element_text(size = 12),
+  axis.text=element_text(size=7),
+  axis.title=element_text(size=12)
+  )
+dev.off()
+```
+
+```{r}
+all_auc = rep(0, length(all_markers))
+names(all_auc) = names(all_markers)
+for (i in names(all_markers)){
+  all_auc[i] = gene_auc(true_markers, rownames(all_markers[[i]]))
+}
+
+all_auc[order(-all_auc)]
+
+```
+
+
