@@ -1,3 +1,5 @@
+[![Open in Code Ocean](https://codeocean.com/codeocean-assets/badge/open-in-code-ocean.svg)](https://doi.org/10.24433/CO.0660282.v1)
+
 # stratified-tests-for-seurat
 Stratified statistic hypothesis tests for Seurat
 
